@@ -25,7 +25,7 @@ class WikiText2DataSet(Dataset):
     It's toy implementation, train on rather small dataset,
     so we don't restrict vocabulary size.
     """
-    def __init__(self, data_file_path, ngram=5):
+    def __init__(self, data_file_path, window_size=2):
         """
         :param data_file_path: path for the plain text file
         :param ngram:  language model n-grams
@@ -33,50 +33,56 @@ class WikiText2DataSet(Dataset):
         with open(data_file_path,'r',encoding='utf-8') as f:
             s = f.read().lower()
         words_tokenized = word_tokenize(s)
-        self.grams =  [([words_tokenized[i+j] for j in range(ngram-1)], words_tokenized[i + ngram -1])
-            for i in range(len(words_tokenized) - ngram + 1)]
+
+        self.context_target =  [([words_tokenized[i-(j+1)] for j in range(window_size)] +\
+                                 [words_tokenized[i+(j+1)] for j in range(window_size)],
+                                words_tokenized[i])
+                                for i in range(window_size, len(words_tokenized)-window_size)]
+
         self.vocab = Counter(words_tokenized)
         self.word_to_idx = {word_tuple[0]: idx for idx, word_tuple in enumerate(self.vocab.most_common())}
+        self.idx_to_word = list(self.word_to_idx.keys())
         self.vocab_size = len(self.vocab)
-        self.ngram = ngram
+        self.window_size = window_size
 
     def __getitem__(self, idx):
-        context = torch.tensor([self.word_to_idx[w] for w in self.grams[idx][0]])
-        target = torch.tensor([self.word_to_idx[self.grams[idx][1]]])
+        context = torch.tensor([self.word_to_idx[w] for w in self.context_target[idx][0]])
+        target = torch.tensor([self.word_to_idx[self.context_target[idx][1]]])
         return context, target
 
     def __len__(self):
-        return len(self.grams)
+        return len(self.context_target)
 
-class NGramLanguageModel(nn.Module):
+class CBOW(nn.Module):
 
-    def __init__(self, vocab_size, embedding_dim, ngram):
-        super(NGramLanguageModel, self).__init__()
+    def __init__(self, vocab_size, embedding_dim, window_size):
+        super(CBOW, self).__init__()
         self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-        self.linear1 = nn.Linear((ngram - 1) * embedding_dim, 128)
-        self.linear2 = nn.Linear(128, vocab_size)
+        self.linear = nn.Linear(embedding_dim, vocab_size)
+        self.window_size = window_size
 
-    def forward(self, inputs, batch_size):
+    def forward(self, inputs):
 
-        embeds = self.embeddings(inputs).view((batch_size, -1)) # concat the word representations [batch_size, (ngram - 1) x embedding]
-        out = F.relu(self.linear1(embeds)) # nonlinear + projection
-        out = self.linear2(out) # linear project to vocabulary space
+        embeds = torch.sum(self.embeddings(inputs), dim=1) # [200, 4, 50] => [200, 50]
+        # embeds = self.embeddings(inputs).view((batch_size, -1))
+        out = self.linear(embeds) # nonlinear + projection
         log_probs = F.log_softmax(out, dim=1) # softmax compute log probability
+
         return log_probs
 
 
-NGRAM = 5
+WINDOWS_SIZE = 2
 EMBEDDING_DIM = 50
-BATCH_SIZE = 200
-NUM_EPOCH = 5
+BATCH_SIZE = 500
+NUM_EPOCH = 20
 
 # I think torchtext is really hard to use
 # It's a toy example, so you can use any plain text dataset
-# data_file_path = './corpus/wikitext-2/wikitext-2/wiki.train.tokens'
-data_file_path = './corpus/Pride-and-Prejudice.txt'
+data_file_path = './corpus/wikitext-2/wikitext-2/wiki.train.tokens'
+# data_file_path = './corpus/Pride-and-Prejudice.txt'
 
 data = WikiText2DataSet(data_file_path=data_file_path)
-model = NGramLanguageModel(len(data.vocab), EMBEDDING_DIM, NGRAM)
+model = CBOW(len(data.vocab), EMBEDDING_DIM, WINDOWS_SIZE)
 # optimizer = optim.SGD(model.parameters(), lr=0.001)
 optimizer = optim.Adam(model.parameters(), lr=0.01)
 loss_function = nn.NLLLoss()
@@ -85,7 +91,7 @@ cuda_available = torch.cuda.is_available()
 data_loader = DataLoader(data, batch_size=BATCH_SIZE)
 
 # Writer
-writer = SummaryWriter('./logs/NNLM')
+writer = SummaryWriter('./logs/CBOW')
 
 for epoch in range(NUM_EPOCH):
     total_loss = 0
@@ -102,7 +108,7 @@ for epoch in range(NUM_EPOCH):
             model = model.cuda()
 
         model.zero_grad()
-        log_probs = model(context, BATCH_SIZE)
+        log_probs = model(context)
         loss = loss_function(log_probs, target)
         loss.backward()
         optimizer.step()
@@ -122,6 +128,8 @@ writer.close()
 
 # print some results
 embed_matrix = model.embeddings.weight.detach().cpu().numpy()
-print_k_nearest_neighbour(embed_matrix, data.word_to_idx['she'], 5, list(data.word_to_idx.keys()))
-print_k_nearest_neighbour(embed_matrix, data.word_to_idx['is'], 5, list(data.word_to_idx.keys()))
-print_k_nearest_neighbour(embed_matrix, data.word_to_idx['good'], 5, list(data.word_to_idx.keys()))
+print_k_nearest_neighbour(embed_matrix, data.word_to_idx['she'], 10, list(data.word_to_idx.keys()))
+print_k_nearest_neighbour(embed_matrix, data.word_to_idx['is'], 10, list(data.word_to_idx.keys()))
+print_k_nearest_neighbour(embed_matrix, data.word_to_idx['good'], 10, list(data.word_to_idx.keys()))
+
+# TODO, refine the models, take models, and dataset into one class file respectively
