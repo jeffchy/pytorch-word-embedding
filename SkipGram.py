@@ -1,6 +1,7 @@
-# This file Train a word Embedding Using CBOW
+# This file Train a word Embedding Using SkipGram
 # Implementing refer to official tutorial of pytorch
 # https://pytorch.org/tutorials/beginner/nlp/word_embeddings_tutorial.html
+# TODO Add subsampling and negative sampling
 
 import torch
 import torch.nn as nn
@@ -33,48 +34,44 @@ class WikiText2DataSet(Dataset):
         with open(data_file_path,'r',encoding='utf-8') as f:
             s = f.read().lower()
         words_tokenized = word_tokenize(s)
-
-        self.context_target =  [([words_tokenized[i-(j+1)] for j in range(window_size)] +\
-                                 [words_tokenized[i+(j+1)] for j in range(window_size)],
-                                words_tokenized[i])
+        # pairs
+        self.word_pair = [(words_tokenized[i], words_tokenized[i+j]) for j in range(-window_size, window_size + 1) if j != 0 \
                                 for i in range(window_size, len(words_tokenized)-window_size)]
 
         self.vocab = Counter(words_tokenized)
         self.word_to_idx = {word_tuple[0]: idx for idx, word_tuple in enumerate(self.vocab.most_common())}
-        self.idx_to_word = list(self.word_to_idx.keys())
         self.vocab_size = len(self.vocab)
         self.window_size = window_size
 
     def __getitem__(self, idx):
-        context = torch.tensor([self.word_to_idx[w] for w in self.context_target[idx][0]])
-        target = torch.tensor([self.word_to_idx[self.context_target[idx][1]]])
+        context = torch.tensor([self.word_to_idx[self.word_pair[idx][0]]])
+        target = torch.tensor([self.word_to_idx[self.word_pair[idx][1]]])
         return context, target
 
     def __len__(self):
-        return len(self.context_target)
+        return len(self.word_pair)
 
-class CBOW(nn.Module):
+class SkipGram(nn.Module):
 
     def __init__(self, vocab_size, embedding_dim, window_size):
-        super(CBOW, self).__init__()
+        super(SkipGram, self).__init__()
         self.embeddings = nn.Embedding(vocab_size, embedding_dim)
         self.linear = nn.Linear(embedding_dim, vocab_size)
         self.window_size = window_size
 
     def forward(self, inputs):
-
-        embeds = torch.sum(self.embeddings(inputs), dim=1) # [200, 4, 50] => [200, 50]
+        embeds = torch.sum(self.embeddings(inputs), dim=1)  # [200, 1, 50] => [200, 50]
         # embeds = self.embeddings(inputs).view((batch_size, -1))
-        out = self.linear(embeds) # nonlinear + projection
-        log_probs = F.log_softmax(out, dim=1) # softmax compute log probability
+        out = self.linear(embeds)  # nonlinear + projection
+        log_probs = F.log_softmax(out, dim=1)  # softmax compute log probability
 
         return log_probs
 
 
-WINDOWS_SIZE = 2
+WINDOW_SIZE = 2
 EMBEDDING_DIM = 50
-BATCH_SIZE = 500
-NUM_EPOCH = 20
+BATCH_SIZE = 800
+NUM_EPOCH = 5
 
 # I think torchtext is really hard to use
 # It's a toy example, so you can use any plain text dataset
@@ -82,7 +79,7 @@ data_file_path = './corpus/wikitext-2/wikitext-2/wiki.train.tokens'
 # data_file_path = './corpus/Pride-and-Prejudice.txt'
 
 data = WikiText2DataSet(data_file_path=data_file_path)
-model = CBOW(len(data.vocab), EMBEDDING_DIM, WINDOWS_SIZE)
+model = SkipGram(len(data.vocab), EMBEDDING_DIM, WINDOW_SIZE)
 # optimizer = optim.SGD(model.parameters(), lr=0.001)
 optimizer = optim.Adam(model.parameters(), lr=0.01)
 loss_function = nn.NLLLoss()
@@ -91,7 +88,7 @@ cuda_available = torch.cuda.is_available()
 data_loader = DataLoader(data, batch_size=BATCH_SIZE)
 
 # Writer
-writer = SummaryWriter('./logs/CBOW')
+writer = SummaryWriter('./logs/NNLM')
 
 for epoch in range(NUM_EPOCH):
     total_loss = 0
@@ -128,8 +125,6 @@ writer.close()
 
 # print some results
 embed_matrix = model.embeddings.weight.detach().cpu().numpy()
-print_k_nearest_neighbour(embed_matrix, data.word_to_idx['she'], 10, list(data.word_to_idx.keys()))
-print_k_nearest_neighbour(embed_matrix, data.word_to_idx['is'], 10, list(data.word_to_idx.keys()))
-print_k_nearest_neighbour(embed_matrix, data.word_to_idx['good'], 10, list(data.word_to_idx.keys()))
-
-# TODO, refine the models, take models, and dataset into one class file respectively
+print_k_nearest_neighbour(embed_matrix, data.word_to_idx['she'], 5, list(data.word_to_idx.keys()))
+print_k_nearest_neighbour(embed_matrix, data.word_to_idx['is'], 5, list(data.word_to_idx.keys()))
+print_k_nearest_neighbour(embed_matrix, data.word_to_idx['good'], 5, list(data.word_to_idx.keys()))
